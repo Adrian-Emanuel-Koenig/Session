@@ -1,0 +1,240 @@
+import express from "express";
+import { connectionMDB } from "./src/connection/mongoDb.js";
+import { dirname } from "path";
+import { fileURLToPath } from "url";
+import { engine } from "express-handlebars";
+import { Router } from "express";
+import { Server } from "socket.io";
+import http from "http";
+import { productos, mensajes } from "./src/controllers/products.js";
+import { normalize, schema } from "normalizr";
+import { faker } from "@faker-js/faker";
+
+import session from "express-session";
+import MongoStore from "connect-mongo";
+import passport from "passport";
+import { Strategy } from "passport-local";
+import Usuarios from "./src/models/userSchema.js";
+import * as bcrypt from "bcrypt";
+import * as routes from "./src/routes/routes.js";
+
+const { product, price, image } = faker;
+
+const app = express();
+const port = process.env.port || 8080;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const server = http.createServer(app);
+const io = new Server(server);
+
+/* -------------------------------------------------------------------------- */
+/*                                   Server                                   */
+/* -------------------------------------------------------------------------- */
+
+server.listen(port, async () => {
+  await connectionMDB;
+  console.log("Server on: http://localhost:" + port);
+});
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(__dirname + "/src/public"));
+
+app.use(
+  session({
+    store: MongoStore.create({
+      mongoUrl:
+        "mongodb+srv://Koenig:24042503@coderhouse.haylz8i.mongodb.net/usuario?retryWrites=true&w=majority",
+      mongoOptions: {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+      },
+    }),
+
+    secret: "secreto",
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: {
+      maxAge: 60000,
+    },
+  })
+);
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+app.set("view engine", "hbs");
+app.set("views", "./src/views");
+app.engine(
+  "hbs",
+  engine({
+    extname: ".hbs",
+    defaultLayout: "index.hbs",
+    layoutsDir: __dirname + "/src/views/layouts",
+    partialsDir: __dirname + "/src/views/partials",
+  })
+);
+
+app.use("/api/productos", Router);
+
+app.use("/api/productos-test", (req, res) => {
+  let prodFaker = [];
+  for (let i = 0; i < 5; i++) {
+    prodFaker.push({
+      producto: faker.commerce.product(),
+      precio: faker.commerce.price(1000, 4000, 0, "$"),
+      image: faker.image.abstract(150, 150),
+    });
+  }
+  res.json(prodFaker);
+});
+
+app.use("/api/nombre", (req, res) => {
+  res.json(req.session.username);
+});
+/* -------------------------------------------------------------------------- */
+/*                                    Rutas                                   */
+/* -------------------------------------------------------------------------- */
+app.get("/", routes.home);
+app.get("/login", routes.getLogin);
+app.post(
+  "/login",
+  passport.authenticate("login", { failureRedirect: "/failureLogin" }),
+  routes.postLogin
+);
+app.get("/logout", routes.renderizar, routes.logout);
+app.get("/signup", routes.getSignIn);
+app.post(
+  "/signup",
+  passport.authenticate("signup", { failureRedirect: "/failureSignin" }),
+  routes.postSignIn
+);
+app.get("/failureLogin", (req,res)=>{
+  res.render("failureLogin")
+})
+app.get("/failureSignin", (req,res)=>{
+  res.render("failureSignin")
+})
+/* -------------------------------------------------------------------------- */
+/*                                  Passport                                  */
+/* -------------------------------------------------------------------------- */
+
+function isValidPassword(user, password) {
+  return bcrypt.compareSync(password, user.password);
+}
+function createHash(password) {
+  return bcrypt.hashSync(password, bcrypt.genSaltSync(10), null);
+}
+
+passport.use(
+  "login",
+  new Strategy((username, password, done) => {
+    Usuarios.findOne({ username }, (err, user) => {
+      if (err) return done(err);
+
+      if (!user) {
+        console.log("User Not Found with username " + username);
+        return done(null, false);
+      }
+
+      if (!isValidPassword(user, password)) {
+        console.log("Invalid Password");
+        return done(null, false);
+      }
+
+      return done(null, user);
+    });
+  })
+);
+
+passport.use(
+  "signup",
+  new Strategy(
+    {
+      passReqToCallback: true,
+    },
+    (req, username, password, done) => {
+      Usuarios.findOne({ username: username }, function (err, user) {
+        if (err) {
+          console.log("Error in SignUp: " + err);
+          return done(err);
+        }
+
+        if (user) {
+          console.log("User already exists");
+          return done(null, false);
+        }
+
+        const newUser = {
+          username: username,
+          password: createHash(password),
+        };
+        console.log(newUser);
+        Usuarios.create(newUser, (err, userWithId) => {
+          if (err) {
+            console.log("Error in Saving user: " + err);
+            return done(err);
+          }
+          console.log(user);
+          console.log("User Registration succesful");
+          return done(null, userWithId);
+        });
+      });
+    }
+  )
+);
+
+passport.serializeUser((user, done) => {
+  done(null, user._id);
+});
+
+passport.deserializeUser((id, done) => {
+  Usuarios.findById(id, done);
+});
+
+/* -------------------------------------------------------------------------- */
+/*                                Normalización                               */
+/* -------------------------------------------------------------------------- */
+
+const authorSchema = new schema.Entity("authors", {}, { idAttribute: "email" });
+const messageSchema = new schema.Entity("messages", { author: authorSchema });
+const chatSchema = new schema.Entity("chats", { messages: [messageSchema] });
+const normalizarData = (data) => {
+  const dataNormalizada = normalize(
+    { id: "chatHistory", messages: data },
+    chatSchema
+  );
+  return dataNormalizada;
+};
+const normalizarMensajes = async () => {
+  const messages = await mensajes.getAll();
+  console.log(messages);
+  const normalizedMessages = normalizarData(messages);
+  console.log(JSON.stringify(normalizedMessages, null, 4));
+
+  return normalizedMessages;
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                  Socket.io                                 */
+/* -------------------------------------------------------------------------- */
+
+io.on("connection", async (socket) => {
+  const products = await productos.getAll();
+  socket.emit("allProducts", products);
+  socket.on("msg", async (data) => {
+    const today = new Date();
+    const now = today.toLocaleString();
+    await mensajes.save({ timestamp: now, ...data });
+    io.sockets.emit("msg-list", await mensajes.getAll());
+    io.sockets.emit("msg-list2", await normalizarMensajes());
+  });
+
+  socket.on("productoEnviado", saveProduct);
+});
+
+async function saveProduct(data) {
+  await productos.save(data);
+  productos.getAll().then((element) => io.sockets.emit("allProducts", element));
+}
