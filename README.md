@@ -1,4 +1,4 @@
-# Session
+# Process
 
 Comando de iniciación: npm start
 
