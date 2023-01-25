@@ -5,7 +5,7 @@
   "main": "app.js",
   "type": "module",
   "scripts": {
-    "start": "nodemon app.js"
+    "start": "nodemon app.js -p 8080"
   },
   "author": "",
   "license": "ISC",
@@ -17,6 +17,7 @@
     "express": "^4.18.2",
     "express-handlebars": "^6.0.6",
     "express-session": "^1.17.3",
+    "minimist": "^1.2.7",
     "mongoose": "^6.8.1",
     "mongoose-findorcreate": "^3.0.0",
     "normalizr": "^3.6.2",

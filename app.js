@@ -17,11 +17,14 @@ import { Strategy } from "passport-local";
 import Usuarios from "./src/models/userSchema.js";
 import * as bcrypt from "bcrypt";
 import * as routes from "./src/routes/routes.js";
+import minimist from "minimist";
+import { fork } from "child_process";
 
 const { product, price, image } = faker;
 
+const args = minimist(process.argv.slice(2));
 const app = express();
-const port = process.env.port || 8080;
+const port = args.p || 8080;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const server = http.createServer(app);
@@ -93,10 +96,48 @@ app.use("/api/productos-test", (req, res) => {
 app.use("/api/nombre", (req, res) => {
   res.json(req.session.username);
 });
+
+/* -------------------------------------------------------------------------- */
+/*                                    Fork                                    */
+/* -------------------------------------------------------------------------- */
+
+let visitas = 0;
+
+app.get("/api/randoms/", (req, res) => {
+  const computo = fork("./computo.js");
+
+  computo.send({
+    mensaje: "start",
+    cantidad: 100000000,
+  });
+
+  computo.on("message", (msg) => {
+    res.json(msg);
+  });
+});
+
+app.get("/", (req, res) => {
+  res.end("Ok " + ++visitas);
+});
+
+app.get("/api/randoms/:cant", (req, res) => {
+  const { cant } = req.params;
+  const computo = fork("./computo.js");
+
+  computo.send({
+    mensaje: "start",
+    cantidad: cant,
+  });
+
+  computo.on("message", (msg) => {
+    res.json(msg);
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 /*                                    Rutas                                   */
 /* -------------------------------------------------------------------------- */
-app.get("/", routes.home);
+// app.get("/", routes.home);
 app.get("/login", routes.getLogin);
 app.post(
   "/login",
@@ -110,12 +151,24 @@ app.post(
   passport.authenticate("signup", { failureRedirect: "/failureSignin" }),
   routes.postSignIn
 );
-app.get("/failureLogin", (req,res)=>{
-  res.render("failureLogin")
-})
-app.get("/failureSignin", (req,res)=>{
-  res.render("failureSignin")
-})
+app.get("/failureLogin", (req, res) => {
+  res.render("failureLogin");
+});
+app.get("/failureSignin", (req, res) => {
+  res.render("failureSignin");
+});
+
+app.get("/info", (req, res) => {
+  res.json({
+    "Nombre de la plataforma": process.platform,
+    "Argumentos de entrada": process.argv,
+    "Carpeta del proyecto": process.execPath,
+    "Process id": process.pid,
+    "Path de ejecución": process.cwd(),
+    "Memoria total reservada": process.memoryUsage().rss,
+    "Versión de node.js": process.version,
+  });
+});
 /* -------------------------------------------------------------------------- */
 /*                                  Passport                                  */
 /* -------------------------------------------------------------------------- */
